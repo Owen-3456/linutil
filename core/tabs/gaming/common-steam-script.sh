@@ -26,13 +26,39 @@ tmp_dir="/tmp/$(basename "$git_repo" .git)"
 #   compatdata_path  Full path: steamapps_dir/compatdata/steam_compatdata
 #   common_path      Full path: steamapps_dir/common/steam_common
 
+# List candidate steamapps directories, newline separated.
+# Steam records every library it knows about in libraryfolders.vdf, so parse that
+# instead of walking the filesystem: a recursive find over $HOME and /mnt can stall
+# for a very long time on network shares or large secondary drives.
+list_steamapps_dirs() {
+    for steam_root in \
+        "$HOME/.steam/steam" \
+        "$HOME/.steam/root" \
+        "$HOME/.local/share/Steam" \
+        "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam" \
+        "$HOME/snap/steam/common/.local/share/Steam"; do
+
+        [ -d "$steam_root/steamapps" ] || continue
+        printf "%s\n" "$steam_root/steamapps"
+
+        for vdf in "$steam_root/steamapps/libraryfolders.vdf" "$steam_root/config/libraryfolders.vdf"; do
+            [ -f "$vdf" ] || continue
+            # Each library is recorded as:    "path"    "/some/dir"
+            sed -n 's/^[[:space:]]*"path"[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' "$vdf" |
+                while IFS= read -r lib_path; do
+                    [ -d "$lib_path/steamapps" ] && printf "%s\n" "$lib_path/steamapps"
+                done
+        done
+    done
+}
+
 # Locate the steamapps directory that contains the game and populate path variables
 find_steamapps_dirs() {
     [ -n "$steamapps_dir" ] && return 0
 
     printf "%b\n" "${YELLOW}Searching for Steam libraries with $steam_game...${RC}"
 
-    all_steamapps=$(find "$HOME" /mnt -type d -name "steamapps" 2>/dev/null | head -20)
+    all_steamapps=$(list_steamapps_dirs | awk '!seen[$0]++')
 
     if [ -z "$all_steamapps" ]; then
         printf "%b\n" "${RED}No Steam libraries found.${RC}"
@@ -52,6 +78,8 @@ $all_steamapps
 EOF
 
     printf "%b\n" "${RED}$steam_game not found in any Steam library.${RC}"
+    printf "%b\n" "${YELLOW}Libraries checked:${RC}"
+    printf "%s\n" "$all_steamapps"
     return 1
 }
 
